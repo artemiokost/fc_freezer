@@ -14,7 +14,6 @@ fn build_and_link_cheat_arm() {
     let _ = Command::new("taskkill").args(&["/F", "/IM", "fc_freezer.exe"]).status();
     std::thread::sleep(std::time::Duration::from_millis(300));
 
-    // Твои оригинальные жесткие пути к FreezerLoader
     let target_path = "C:\\FreezerLoader\\fc_freezer.exe";
     let backup_path = "C:\\FreezerLoader\\fc_freezer.old";
     let _ = std::fs::remove_file(backup_path);
@@ -36,7 +35,7 @@ fn build_and_link_cheat_arm() {
     assert!(freezer_status.success());
 
     println!("\n=======================================================");
-    println!("[*] ШАГ 3: Надежная Сборка Драйвера силами Cargo...");
+    println!("[*] ШАГ 3: Изолированная сборка Kernel-драйвера (no_std Ring 0)...");
     println!("=======================================================");
 
     let driver_status = Command::new("cargo")
@@ -49,7 +48,7 @@ fn build_and_link_cheat_arm() {
     println!("[*] ШАГ 4: Вызов оригинального линковщика Microsoft link.exe...");
     println!("=======================================================");
 
-    // ЧИСТАЯ ЛИНКОВКА: ntoskrnl.lib полностью убран из аргументов! Больше никаких ошибок LNK1181!
+    // ПРЯМОЙ И СТАБИЛЬНЫЙ ВЫЗОВ: ntoskrnl.lib убрана из аргументов, линковка не упадет!
     let link_output = Command::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe")
         .args(&[
             "/DRIVER",
@@ -57,7 +56,6 @@ fn build_and_link_cheat_arm() {
             "/ENTRY:DriverEntry",
             "/MACHINE:X64",
             "/NODEFAULTLIB",
-            // Путь к либам самого компилятора VS 2022
             "/LIBPATH:C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x64",
             "/OUT:C:\\Users\\artem\\.cargo-target\\release\\fc_driver.sys",
             "C:\\Users\\artem\\.cargo-target\\release\\fc_driver.lib"

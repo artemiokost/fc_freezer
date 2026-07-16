@@ -11,7 +11,6 @@ unsafe extern "system" {
 }
 
 pub struct TrainerState {
-    pub driver_status_str: String,
     pub game_pid: u32,
     pub addr_ai: u64,
     pub addr_net: u64,
@@ -30,7 +29,7 @@ fn send_kernel_request(req: &WriteMemoryRequest) -> i32 {
             core::ptr::null_mut(),
             0x777FFFFF,
             req as *const _ as *mut core::ffi::c_void,
-            std::mem::size_of::<WriteMemoryRequest>() as u32
+            size_of::<WriteMemoryRequest>() as u32
         )
     }
 }
@@ -44,18 +43,13 @@ pub fn spawn_workers(state: Arc<Mutex<TrainerState>>, config: TrainerConfig) {
         let mut current_version = send_kernel_request(&req_ping);
 
         if current_version != DRIVER_VERSION_CODE {
-            {
-                let mut s = init_state.lock().unwrap();
-                s.driver_status_str = String::from("Ядро не отвечает. Авто-маппинг...");
-            }
-
             if let Ok(mut c_dir) = env::current_exe() {
                 if c_dir.pop() {
                     let m_path = c_dir.join("kdmapper.exe");
                     let d_path = c_dir.join("fc_driver.sys");
 
                     if fs::metadata(&m_path).is_ok() && fs::metadata(&d_path).is_ok() {
-                        // ИСПРАВЛЕНО: Полностью глушим логи kdmapper через Stdio::null(), чтобы не ломать TUI
+                        // Полностью глушим логи kdmapper через Stdio::null(), чтобы не ломать TUI
                         let _ = Command::new(m_path)
                             .arg(d_path)
                             .stdout(Stdio::null())
@@ -68,14 +62,13 @@ pub fn spawn_workers(state: Arc<Mutex<TrainerState>>, config: TrainerConfig) {
             current_version = send_kernel_request(&req_ping);
         }
 
+        // Финальное уведомление в консоль о статусе синхронизации ядра
         {
             let mut s = init_state.lock().unwrap();
             if current_version == DRIVER_VERSION_CODE {
-                s.driver_status_str = format!("v{:.2} [ СВЯЗЬ ЯДРА ОК ]", (current_version as f32) / 100.0);
-            } else if current_version > 0 {
-                s.driver_status_str = format!("v{:.2} [ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА ПК]", (current_version as f32) / 100.0);
+                s.log_message = String::from("[+] Канал связи Ring 0 установлен успешно. Ожидание запуска игры...");
             } else {
-                s.driver_status_str = String::from("ОШИБКА ЗАГРУЗКИ. Проверьте BIOS / HVCI");
+                s.log_message = String::from("[!] Драйвер не ответил. Проверьте статус безопасной загрузки в BIOS.");
             }
         }
 

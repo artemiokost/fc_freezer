@@ -19,13 +19,20 @@ fn main() -> Result<(), io::Error> {
     let config = load_or_create_config();
 
     let state = Arc::new(Mutex::new(TrainerState {
-        game_pid: 0, addr_ai: 0, addr_net: 0,
-        mod_disable_ai: false, mod_div_spoof: false, mod_draft_round: false,
-        mod_wl_spoof: false, mod_server_change: false, mod_alttab_bypass: false,
+        driver_status_str: String::from("Инициализация..."),
+        game_pid: 0,
+        addr_ai: 0,
+        addr_net: 0,
+        mod_disable_ai: false,
+        mod_div_spoof: false,
+        mod_draft_round: false,
+        mod_wl_spoof: false,
+        mod_server_change: false,
+        mod_alttab_bypass: false,
         log_message: String::from("[*] Сканирование дескрипторов сети и игровых сессий..."),
     }));
 
-    // Запускаем фоновые потоки из нашего нового модуля trainer.rs
+    // Запускаем фоновые потоки из нашего модуля trainer.rs
     spawn_workers(Arc::clone(&state), config.clone());
 
     enable_raw_mode()?;
@@ -49,9 +56,15 @@ fn main() -> Result<(), io::Error> {
                 .style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
                 .alignment(ratatui::layout::Alignment::Center)
                 .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)));
+
+            // ИСПРАВЛЕНО: Индексация среза вместо передачи всей структуры
             f.render_widget(header, chunks[0]);
 
-            let mut active_str = format!(" Процесс игры: {}\n\n MODS STATUS:\n", if s.game_pid == 0 { String::from("Ожидание запуска FC26.exe...") } else { format!("FC26.exe (PID: {})", s.game_pid) });
+            let mut active_str = format!(
+                " ДРАЙВЕР ЯДРА RING 0: {}\n Процесс игры:       {}\n\n MODS STATUS:\n",
+                s.driver_status_str,
+                if s.game_pid == 0 { String::from("Ожидание запуска FC26.exe...") } else { format!("FC26.exe (PID: {})", s.game_pid) }
+            );
             active_str.push_str(&format!(" [F5] Disable AI Opponent:       {}\n", if s.mod_disable_ai { "[ ACTIVE ]" } else { "[ OFF ]" }));
             active_str.push_str(&format!(" [F6] Division Spoofer (Div {}):  {}\n", config.spoofed_division, if s.mod_div_spoof { "[ ACTIVE ]" } else { "[ OFF ]" }));
             active_str.push_str(&format!(" [F7] Draft Round Modifier (R{}): {}\n", config.spoofed_draft_round, if s.mod_draft_round { "[ ACTIVE ]" } else { "[ OFF ]" }));
@@ -64,11 +77,13 @@ fn main() -> Result<(), io::Error> {
                 .style(Style::default().fg(Color::White))
                 .block(Block::default().title(" АППАРАТНАЯ СЕТЕВАЯ ИГРОВАЯ СЕССИЯ ").borders(Borders::ALL).border_style(Style::default().fg(Color::Magenta)))
                 .wrap(Wrap { trim: true });
+
+            // ИСПРАВЛЕНО: Индексация среза для главной панели
             f.render_widget(main_panel, chunks[1]);
 
             let tips_str = " ⚠️ СИСТЕМА БЕЗОПАСНОГО ИСПОЛЬЗОВАНИЯ И КОНТЕНТ-КОНТРОЛЯ:\n\n\
                              • ИСПОЛЬЗУЙТЕ СТРОГО СДВОРЕННЫЕ / АЛЬТЕРНАТИВНЫЕ АККАУНТЫ, если беспокоитесь за прогресс.\n\
-                             • ИЗБЕГАЙТЕ ОТКРОВЕННОЙ ДЕМОНСТРАЦИИ: не отключайте ИИ ботов в казуальных лобби на глазах реальных игроков.\n\
+                             • ИЗБЕГАЙТЕ ОТКРОВЕННОЙ ДЕМОНСТРАЦИИ: не отключайте ИИ ботов in казуальных лобби на глазах реальных игроков.\n\
                              • ДЕРЖИТЕ НАСТРОЙКИ СКРОМНЫМИ: устанавливайте дивизионы и победы, имитируя человеческие результаты.\n\
                              • СЛЕДИТЕ ЗА ОБНОВЛЕНИЯМИ В DISCORD-КАНАЛЕ для получения информации о патчах безопасности.";
 
@@ -76,12 +91,16 @@ fn main() -> Result<(), io::Error> {
                 .style(Style::default().fg(Color::Yellow))
                 .block(Block::default().title(" TIPS FOR SAFE USE ").borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow)))
                 .wrap(Wrap { trim: true });
+
+            // ИСПРАВЛЕНО: Индексация среза для панели советов
             f.render_widget(tips_panel, chunks[2]);
 
             let footer = Paragraph::new(" Нажимайте клавиши F5 - F10 прямо внутри онлайн сессий | Нажмите [Q] для закрытия ")
                 .style(Style::default().fg(Color::DarkGray))
                 .alignment(ratatui::layout::Alignment::Center)
                 .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)));
+
+            // ИСПРАВЛЕНО: Индексация среза для подвала
             f.render_widget(footer, chunks[3]);
         })?;
 

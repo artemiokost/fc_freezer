@@ -1,5 +1,5 @@
 use std::{thread, time::Duration, fs, sync::{Arc, Mutex}, process::Command, env};
-use fc_shared::{WriteMemoryRequest, OP_DISABLE_AI};
+use fc_shared::{WriteMemoryRequest, OP_PING, OP_DISABLE_AI, DRIVER_VERSION_CODE};
 use crate::ProcessDriver;
 
 #[link(name = "user32")]
@@ -18,6 +18,7 @@ pub struct TrainerConfig {
 }
 
 pub struct TrainerState {
+    pub driver_status_str: String,
     pub game_pid: u32,
     pub addr_ai: u64,
     pub addr_net: u64,
@@ -47,24 +48,55 @@ pub fn load_or_create_config() -> TrainerConfig {
     new_config
 }
 
-pub fn spawn_workers(state: Arc<Mutex<TrainerState>>, config: TrainerConfig) {
-    // ПОЛНЫЙ АВТОМАТ: Динамически определяем текущую папку и запускаем маппер "рядом с собой"
-    thread::spawn(move || {
-        // Получаем полный путь к текущему fc_freezer.exe
-        if let Ok(mut current_dir) = env::current_exe() {
-            // Отрезаем имя fc_freezer.exe, оставляя только путь к папке (FreezerLoader)
-            if current_dir.pop() {
-                let mapper_path = current_dir.join("kdmapper.exe");
-                let driver_path = current_dir.join("fc_driver.sys");
+// Отправляет пинг и возвращает версию, полученную из Ring 0
+fn get_driver_version() -> i32 {
+    let req = WriteMemoryRequest { process_id: 0, target_address: 0, operation_id: OP_PING, i32_value: 0 };
+    unsafe {
+        let res = SetWindowLongPtrW(&req as *const _ as *mut core::ffi::c_void, 0x777FFFFF, std::ptr::null_mut());
+        res as i32
+    }
+}
 
-                // Проверяем, лежат ли файлы маппера и драйвера в этой же папке рядом
-                if fs::metadata(&mapper_path).is_ok() && fs::metadata(&driver_path).is_ok() {
-                    // Запускаем маппер из локальной директории
-                    let _ = Command::new(mapper_path)
-                        .arg(driver_path)
-                        .status();
+pub fn spawn_workers(state: Arc<Mutex<TrainerState>>, config: TrainerConfig) {
+    let init_state = Arc::clone(&state);
+    thread::spawn(move || {
+        {
+            let mut s = init_state.lock().unwrap();
+            s.driver_status_str = String::from("Синхронизация версии...");
+        }
+
+        let mut current_version = get_driver_version();
+
+        // Если ядро не отвечает актуальной версией, запускаем авто-маппинг
+        if current_version != DRIVER_VERSION_CODE {
+            {
+                let mut s = init_state.lock().unwrap();
+                s.driver_status_str = format!("v{} (УСТАРЕЛ). Перезапуск ядра...", current_version);
+            }
+
+            if let Ok(mut current_dir) = env::current_exe() {
+                if current_dir.pop() {
+                    let mapper_path = current_dir.join("kdmapper.exe");
+                    let driver_path = current_dir.join("fc_driver.sys");
+
+                    if fs::metadata(&mapper_path).is_ok() && fs::metadata(&driver_path).is_ok() {
+                        let _ = Command::new(mapper_path).arg(driver_path).status();
+                        thread::sleep(Duration::from_millis(600));
+                    }
                 }
             }
+
+            // Перепроверяем версию после маппинга
+            current_version = get_driver_version();
+        }
+
+        let mut s = init_state.lock().unwrap();
+        if current_version == DRIVER_VERSION_CODE {
+            s.driver_status_str = format!("v{:.2} [ СВЯЗЬ ОК ]", (current_version as f32) / 100.0);
+        } else if current_version > 0 {
+            s.driver_status_str = format!("v{:.2} [ОБЯЗАТЕЛЬНА ПЕРЕЗАГРУЗКА ПК]", (current_version as f32) / 100.0);
+        } else {
+            s.driver_status_str = String::from("ОШИБКА СВЯЗИ. Проверьте BIOS");
         }
     });
 
@@ -105,17 +137,14 @@ pub fn spawn_workers(state: Arc<Mutex<TrainerState>>, config: TrainerConfig) {
         }
     });
 
-    // Поток 2: Мониторинг памяти Frostbite и беспроводная запись Ring 0
+    // Поток 2: Мониторинг памяти Frostbite
     let worker_state = Arc::clone(&state);
     thread::spawn(move || {
         loop {
             thread::sleep(Duration::from_millis(30));
             let mut s = worker_state.lock().unwrap();
 
-            if s.game_pid == 0 {
-                s.game_pid = unsafe { crate::get_process_id("FC26.exe") };
-                continue;
-            }
+            if s.game_pid == 0 { s.game_pid = unsafe { crate::get_process_id("FC26.exe") }; continue; }
             if unsafe { crate::get_process_id("FC26.exe") } == 0 {
                 s.game_pid = 0; s.addr_ai = 0; s.addr_net = 0;
                 s.mod_disable_ai = false; s.mod_div_spoof = false; s.mod_draft_round = false;
@@ -128,7 +157,7 @@ pub fn spawn_workers(state: Arc<Mutex<TrainerState>>, config: TrainerConfig) {
                     let bounds = unsafe { driver.module_bounds() };
                     if s.addr_ai == 0 { if let Some(a) = unsafe { driver.aob_scan(bounds.base_address, bounds.size_of_image, &config.pattern_ai_freeze) } { s.addr_ai = a as u64; } }
                     if s.addr_net == 0 { if let Some(a) = unsafe { driver.aob_scan(bounds.base_address, bounds.size_of_image, &config.pattern_network_data) } { s.addr_net = a as u64; } }
-                    if s.addr_ai != 0 && s.addr_net != 0 { s.log_message = String::from("[+] АВТО-МАППИНГ ЗАВЕРШЕН. СЕТЕВЫЕ ИГРОВЫЕ СЕССИИ CHEATARMY АКТИВНЫ!"); }
+                    if s.addr_ai != 0 && s.addr_net != 0 { s.log_message = String::from("[+] СЕТЕВЫЕ ДЕСКРИПТОРЫ CHEATARMY АКТИВНЫ!"); }
                 }
                 continue;
             }

@@ -37,7 +37,7 @@ impl ProcessDriver {
             if EnumProcessModules(
                 self.process_handle,
                 modules.as_mut_ptr(),
-                std::mem::size_of_val(&modules) as u32,
+                size_of_val(&modules) as u32,
                 &mut cb_needed,
             ) != 0 {
                 let mut mod_info = MODULEINFO {

@@ -1,40 +1,30 @@
-use std::{thread, time::Duration};
-use fc_shared::{WriteMemoryRequest, IOCTL_WRITE_MEMORY, DEVICE_NAME_UTF16};
+use std::{thread, time::Duration, io};
+use fc_shared::WriteMemoryRequest;
 use fc_freezer::{get_process_id, ProcessDriver};
-use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, GENERIC_READ, GENERIC_WRITE};
-use windows_sys::Win32::System::IO::DeviceIoControl;
 
-// ИСПРАВЛЕНО: Импортируем строго CreateFileW, соответствующую спецификации 0.61.2
-use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE
-};
+// Импортируем функцию прямого системного вызова из динамической библиотеки Windows
+#[link(name = "ntdll")]
+unsafe extern "system" { // ИСПРАВЛЕНО: Добавлено ключевое слово unsafe для Rust 2024
+    fn NtQuerySystemInformation(
+        system_information_class: u32,
+        system_information: *mut core::ffi::c_void,
+        system_information_length: u32,
+        return_length: *mut u32,
+    ) -> i32;
+}
 
 fn main() {
     unsafe {
-        println!("[*] Инициализация fc_freezer [windows-sys 0.61.2]...");
+        println!("=======================================================");
+        println!("         ЗАПУСК ПОЛЬЗОВАТЕЛЬСКОГО СКАНЕРА FC_FREEZER   ");
+        println!("=======================================================");
+        println!("[*] Инициализация сканера по беспроводному Kernel-хуку...");
+        println!("[*] Ожидание запуска игры FC26.exe...");
 
-        // Передаем указатель на подготовленный UTF-16 массив имени нашего драйвера
-        let driver_handle = CreateFileW(
-            DEVICE_NAME_UTF16.as_ptr(),
-            GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            std::ptr::null_mut()
-        );
-
-        if driver_handle == INVALID_HANDLE_VALUE {
-            println!("[!] Ошибка: Kernel-драйвер не запущен! Загрузите fc_driver.sys.");
-            return;
-        }
-        println!("[+] Успешный доступ к Kernel-устройству получен.");
-
-        println!("[*] Ожидание старта игры FC26.exe...");
         let mut pid = 0;
         while pid == 0 {
             pid = get_process_id("FC26.exe");
-            thread::sleep(Duration::from_millis(50));
+            thread::sleep(Duration::from_millis(100));
         }
         println!("[+] Процесс игры пойман! PID: {}", pid);
 
@@ -42,34 +32,39 @@ fn main() {
             let bounds = driver.module_bounds();
             let ai_pattern = [0x48, 0x8B, 0x05, -1, -1, -1, -1, 0x48, 0x8B, 0x88, 0x8B, 0x01];
 
-            println!("[*] Поиск сигнатур в памяти Frostbite...");
+            println!("[*] Поиск сигнатур в адресном пространстве Frostbite...");
             if let Some(target_address) = driver.aob_scan(bounds.base_address, bounds.size_of_image, &ai_pattern) {
-                println!("[+] Цель захвачена: 0x{:X}", target_address);
-                println!("[*] Активирован защищенный цикл заморозки...");
+                println!("[+] Цель успешно захвачена: 0x{:X}", target_address);
+                println!("[*] Отправка команд через системную шину ядра Windows...");
+                println!("[+] Заморозка ИИ активирована. Для остановки закройте это окно.");
 
                 let request = WriteMemoryRequest {
                     process_id: pid,
                     target_address: target_address as u64,
-                    value_to_write: 0,
+                    value_to_write: 0, // Удерживаем ноль (паралич)
                 };
 
-                let mut bytes_returned = 0;
                 loop {
-                    DeviceIoControl(
-                        driver_handle,
-                        IOCTL_WRITE_MEMORY,
-                        &request as *const _ as *const _,
+                    // Вызываем легальную системную функцию Windows.
+                    // Наш работающий в ядре драйвер перехватит этот вызов по магическому коду 0x777FFFFF
+                    // и произведет скрытую аппаратную запись в оперативную память.
+                    NtQuerySystemInformation(
+                        0x777FFFFF, // Магический код команды
+                        &request as *const _ as *mut core::ffi::c_void,
                         std::mem::size_of::<WriteMemoryRequest>() as u32,
-                        std::ptr::null_mut(),
-                        0,
-                        &mut bytes_returned,
                         std::ptr::null_mut()
                     );
                     thread::sleep(Duration::from_millis(5));
                 }
             } else {
-                println!("[!] Ошибка: Сигнатура не обнаружена.");
+                println!("[!] ОШИБКА: Паттерн сигнатуры ИИ не найден в памяти игры.");
             }
+        } else {
+            println!("[!] ОШИБКА: Не удалось открыть дескриптор чтения процесса игры.");
         }
+
+        println!("\nНажмите Enter для выхода...");
+        let mut buf = String::new();
+        let _ = io::stdin().read_line(&mut buf);
     }
 }

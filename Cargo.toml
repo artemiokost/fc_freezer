@@ -3,6 +3,9 @@ members = [
     "fc_freezer",
     "fc_shared"
 ]
+exclude = [
+    "fc_driver"
+]
 resolver = "2"
 
 [workspace.package]

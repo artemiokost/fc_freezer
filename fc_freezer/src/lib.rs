@@ -18,42 +18,45 @@ pub struct ProcessDriver {
 
 impl ProcessDriver {
     pub unsafe fn open(process_id: u32) -> Option<Self> {
-        let handle = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, 0, process_id);
-
-        // ИСПРАВЛЕНО: HANDLE — это сырой указатель, сравниваем с null_mut()
-        if handle == core::ptr::null_mut() {
-            None
-        } else {
-            Some(Self { process_handle: handle })
+        // Явно изолируем системные вызовы Windows в блоки unsafe для спецификации Rust 2024
+        unsafe {
+            let handle = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, 0, process_id);
+            if handle == core::ptr::null_mut() {
+                None
+            } else {
+                Some(Self { process_handle: handle })
+            }
         }
     }
 
     pub unsafe fn module_bounds(&self) -> ModuleBounds {
-        let mut modules = [core::ptr::null_mut(); 1024]; // ИСПРАВЛЕНО: Массив пустых указателей
+        let mut modules = [core::ptr::null_mut(); 1024];
         let mut cb_needed = 0u32;
 
-        if EnumProcessModules(
-            self.process_handle,
-            modules.as_mut_ptr(),
-            std::mem::size_of_val(&modules) as u32,
-            &mut cb_needed,
-        ) != 0 {
-            let mut mod_info = MODULEINFO {
-                lpBaseOfDll: std::ptr::null_mut(),
-                SizeOfImage: 0,
-                EntryPoint: std::ptr::null_mut(),
-            };
-
-            if GetModuleInformation(
+        unsafe {
+            if EnumProcessModules(
                 self.process_handle,
-                modules[0], // ИСПРАВЛЕНО: Извлекаем первый HANDLE из массива указателей
-                &mut mod_info,
-                std::mem::size_of::<MODULEINFO>() as u32,
+                modules.as_mut_ptr(),
+                std::mem::size_of_val(&modules) as u32,
+                &mut cb_needed,
             ) != 0 {
-                return ModuleBounds {
-                    base_address: mod_info.lpBaseOfDll as u64,
-                    size_of_image: mod_info.SizeOfImage,
+                let mut mod_info = MODULEINFO {
+                    lpBaseOfDll: std::ptr::null_mut(),
+                    SizeOfImage: 0,
+                    EntryPoint: std::ptr::null_mut(),
                 };
+
+                if GetModuleInformation(
+                    self.process_handle,
+                    modules[0],
+                    &mut mod_info,
+                    std::mem::size_of::<MODULEINFO>() as u32,
+                ) != 0 {
+                    return ModuleBounds {
+                        base_address: mod_info.lpBaseOfDll as u64,
+                        size_of_image: mod_info.SizeOfImage,
+                    };
+                }
             }
         }
 
@@ -63,13 +66,15 @@ impl ProcessDriver {
     pub unsafe fn read_memory(&self, address: u64, buffer: *mut u8, size: usize) -> bool {
         use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
         let mut bytes_read = 0;
-        ReadProcessMemory(
-            self.process_handle,
-            address as *const core::ffi::c_void,
-            buffer as *mut core::ffi::c_void,
-            size,
-            &mut bytes_read,
-        ) != 0
+        unsafe {
+            ReadProcessMemory(
+                self.process_handle,
+                address as *const core::ffi::c_void,
+                buffer as *mut core::ffi::c_void,
+                size,
+                &mut bytes_read,
+            ) != 0
+        }
     }
 
     pub unsafe fn aob_scan(&self, base_address: u64, size: u32, pattern: &[i32]) -> Option<u64> {
@@ -78,17 +83,19 @@ impl ProcessDriver {
 
         while offset < size {
             let current_address = base_address + offset as u64;
-            if self.read_memory(current_address, chunk.as_mut_ptr(), chunk.len()) {
-                for i in 0..chunk.len() - pattern.len() {
-                    let mut found = true;
-                    for j in 0..pattern.len() {
-                        if pattern[j] != -1 && pattern[j] != chunk[i + j] as i32 {
-                            found = false;
-                            break;
+            unsafe {
+                if self.read_memory(current_address, chunk.as_mut_ptr(), chunk.len()) {
+                    for i in 0..chunk.len() - pattern.len() {
+                        let mut found = true;
+                        for j in 0..pattern.len() {
+                            if pattern[j] != -1 && pattern[j] != chunk[i + j] as i32 {
+                                found = false;
+                                break;
+                            }
                         }
-                    }
-                    if found {
-                        return Some(current_address + i as u64);
+                        if found {
+                            return Some(current_address + i as u64);
+                        }
                     }
                 }
             }
@@ -98,7 +105,6 @@ impl ProcessDriver {
     }
 }
 
-// ИСПРАВЛЕНО: Безопасное сравнение дескриптора с null_mut() при выгрузке драйвера процесса
 impl Drop for ProcessDriver {
     fn drop(&mut self) {
         if self.process_handle != core::ptr::null_mut() {
@@ -108,38 +114,39 @@ impl Drop for ProcessDriver {
 }
 
 pub unsafe fn get_process_id(process_name: &str) -> u32 {
-    let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    // ИСПРАВЛЕНО: INVALID_HANDLE_VALUE в windows-sys сравнивается как сырой указатель -1
-    if snapshot == INVALID_HANDLE_VALUE {
-        return 0;
-    }
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return 0;
+        }
 
-    let mut entry = PROCESSENTRY32W {
-        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
-        cntUsage: 0,
-        th32ProcessID: 0,
-        th32DefaultHeapID: 0,
-        th32ModuleID: 0,
-        cntThreads: 0,
-        th32ParentProcessID: 0,
-        pcPriClassBase: 0,
-        dwFlags: 0,
-        szExeFile: [0u16; 260],
-    };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            cntUsage: 0,
+            th32ProcessID: 0,
+            th32DefaultHeapID: 0,
+            th32ModuleID: 0,
+            cntThreads: 0,
+            th32ParentProcessID: 0,
+            pcPriClassBase: 0,
+            dwFlags: 0,
+            szExeFile: [0u16; 260],
+        };
 
-    if Process32FirstW(snapshot, &mut entry) != 0 {
-        loop {
-            let exe_name = String::from_utf16_lossy(&entry.szExeFile);
-            if exe_name.contains(process_name) {
-                CloseHandle(snapshot);
-                return entry.th32ProcessID;
-            }
-            if Process32NextW(snapshot, &mut entry) == 0 {
-                break;
+        if Process32FirstW(snapshot, &mut entry) != 0 {
+            loop {
+                let exe_name = String::from_utf16_lossy(&entry.szExeFile);
+                if exe_name.contains(process_name) {
+                    CloseHandle(snapshot);
+                    return entry.th32ProcessID;
+                }
+                if Process32NextW(snapshot, &mut entry) == 0 {
+                    break;
+                }
             }
         }
-    }
 
-    CloseHandle(snapshot);
-    0
+        CloseHandle(snapshot);
+        0
+    }
 }

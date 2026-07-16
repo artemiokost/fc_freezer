@@ -96,6 +96,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fc_driver"
+version = "0.1.0"
+dependencies = [
+ "fc_shared",
+]
+
+[[package]]
 name = "fc_freezer"
 version = "0.1.0"
 dependencies = [

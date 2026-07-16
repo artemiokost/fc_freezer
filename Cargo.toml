@@ -1,10 +1,8 @@
 [workspace]
 members = [
-    "fc_freezer",
-    "fc_shared"
-]
-exclude = [
-    "fc_driver"
+    "fc_shared",
+    "fc_driver",
+    "fc_freezer"
 ]
 resolver = "2"
 
@@ -14,4 +12,10 @@ edition = "2024"
 
 [workspace.dependencies]
 fc_shared = { path = "fc_shared" }
-windows-sys = { version = "0.61.2" }
+windows-sys = "0.61.2"
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+lto = true
+codegen-units = 1

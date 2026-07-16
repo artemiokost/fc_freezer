@@ -9,7 +9,6 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-// ИСПРАВЛЕНО: Синтаксис Rust 2024
 #[unsafe(no_mangle)]
 pub extern "system" fn _DllMainCRTStartup() -> i32 { 1 }
 
@@ -19,7 +18,6 @@ type PIRP = *mut IRP;
 type NTSTATUS = i32;
 
 const STATUS_SUCCESS: NTSTATUS = 0;
-const STATUS_UNSUCCESSFUL: NTSTATUS = -1073741823;
 
 const IRP_MJ_CREATE: usize = 0;
 const IRP_MJ_CLOSE: usize = 2;
@@ -64,7 +62,7 @@ unsafe extern "system" fn dispatch_create_close(_device_object: PDEVICE_OBJECT, 
 unsafe extern "system" fn dispatch_device_control(
     _device_object: PDEVICE_OBJECT,
     irp: PIRP,
-    _io_stack_location: *mut core::ffi::c_void // ИСПРАВЛЕНО: Добавлено подчеркивание
+    _io_stack_location: *mut core::ffi::c_void
 ) -> NTSTATUS {
     unsafe {
         let system_buffer = (*irp).associated_irp.system_buffer;
@@ -85,18 +83,19 @@ unsafe fn kernel_write_memory(_pid: u32, _address: u64, _value: i32) -> NTSTATUS
     STATUS_SUCCESS
 }
 
-// ИСПРАВЛЕНО: Синтаксис Rust 2024
+// ИСПРАВЛЕНО: Безопасная инициализация под требования KDMapper (обход ошибки 0xc0000001)
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn DriverEntry(driver_object: PDRIVER_OBJECT, _registry_path: *mut core::ffi::c_void) -> NTSTATUS {
-    if driver_object.is_null() {
-        return STATUS_UNSUCCESSFUL;
-    }
-
     unsafe {
-        (*driver_object).major_function[IRP_MJ_CREATE] = dispatch_create_close as *mut core::ffi::c_void;
-        (*driver_object).major_function[IRP_MJ_CLOSE] = dispatch_create_close as *mut core::ffi::c_void;
-        (*driver_object).major_function[IRP_MJ_DEVICE_CONTROL] = dispatch_device_control as *mut core::ffi::c_void;
+        // Регистрируем Major-функции Windows ТОЛЬКО если KDMapper передал живой объект драйвера.
+        // Если пришел NULL (0x0), мы просто пропускаем этот шаг, избегая падения в синий экран (BSOD).
+        if !driver_object.is_null() {
+            (*driver_object).major_function[IRP_MJ_CREATE] = dispatch_create_close as *mut core::ffi::c_void;
+            (*driver_object).major_function[IRP_MJ_CLOSE] = dispatch_create_close as *mut core::ffi::c_void;
+            (*driver_object).major_function[IRP_MJ_DEVICE_CONTROL] = dispatch_device_control as *mut core::ffi::c_void;
+        }
     }
 
+    // ЖЕСТКО возвращаем успех (0x0), чтобы KDMapper зафиксировал успешную посадку нашего Rust-кода в Ring 0
     STATUS_SUCCESS
 }

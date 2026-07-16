@@ -1,4 +1,5 @@
-pub mod trainer; // ПОДКЛЮЧАЕМ НАШ МОДУЛЬ УПРАВЛЕНИЯ ТРЕЙНЕРОМ
+pub mod trainer;
+mod build;
 
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS

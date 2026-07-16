@@ -6,31 +6,40 @@ fn build_and_link_cheat_arm() {
     println!("[*] ШАГ 1: Зачистка фоновых процессов Windows...");
     println!("=======================================================");
 
-    // Принудительно закрываем старый зависший процесс трейнера в FreezerLoader, если он запущен
+    // Принудительно закрываем старый зависший процесс трейнера в FreezerLoader
     let _ = Command::new("taskkill")
         .args(&["/F", "/IM", "fc_freezer.exe"])
         .status();
 
-    // Даем операционной системе Windows 200 миллисекунд, чтобы полностью освободить дескрипторы файла на диске
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     println!("\n=======================================================");
-    println!("[*] ШАГ 2: Запуск автоматической сборки воркспейса Cargo...");
+    println!("[*] ШАГ 2: Автоматическая сборка графического воркспейса Cargo...");
     println!("=======================================================");
 
-    // Компилируем весь воркспейс в режиме релиза
+    // Компилируем воркспейс (fc_shared, fc_freezer) одной командой в релиз
     let cargo_status = Command::new("cargo")
         .args(&["build", "--release"])
         .status()
         .expect("Не удалось запустить команду cargo build");
-    assert!(cargo_status.success(), "Ошибка компиляции проекта Cargo");
+    assert!(cargo_status.success(), "Ошибка компиляции воркспейса Cargo");
 
     println!("\n=======================================================");
-    println!("[*] ШАГ 3: Вызов оригинального линковщика Microsoft link.exe...");
+    println!("[*] ШАГ 3: Изолированная сборка Kernel-драйвера (no_std Ring 0)...");
+    println!("=======================================================");
+
+    // Принудительно собираем драйвер, полностью минуя тестовый профиль std
+    let driver_status = Command::new("cargo")
+        .args(&["build", "--release", "--manifest-path", "../fc_driver/Cargo.toml"])
+        .status()
+        .expect("Не удалось запустить команду cargo build для fc_driver");
+    assert!(driver_status.success(), "Ошибка компиляции драйвера ядра");
+
+    println!("\n=======================================================");
+    println!("[*] ШАГ 4: Вызов оригинального линковщика Microsoft link.exe...");
     println!("=======================================================");
 
     // Вызываем линковщик MSVC для сборки системного файла ядра из кастомной папки Artem
-    // ИСПРАВЛЕНО: Ключ /WHOLEARCHIVE полностью убран. Строка приведена к стандартному синтаксису Windows MSVC link.exe
     let link_status = Command::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe")
         .args(&[
             "/DRIVER",
@@ -46,10 +55,10 @@ fn build_and_link_cheat_arm() {
     assert!(link_status.success(), "Ошибка на этапе линковки драйвера ядра");
 
     println!("\n=======================================================");
-    println!("[*] ШАГ 4: Принудительный перенос файлов в FreezerLoader...");
+    println!("[*] ШАГ 5: Принудительный перенос файлов в FreezerLoader...");
     println!("=======================================================");
 
-    // Копируем скомпилированные и слинкованные бинарники в пусковую папку
+    // Копируем скомпилированные бинарники в пусковую папку
     let copy_driver = std::fs::copy(
         "C:\\Users\\artem\\.cargo-target\\release\\fc_driver.sys",
         "C:\\FreezerLoader\\fc_driver.sys"
@@ -61,7 +70,7 @@ fn build_and_link_cheat_arm() {
     );
 
     if copy_driver.is_err() {
-        println!("[!] Предупреждение: Не удалось обновить fc_driver.sys (возможно, старый хук еще удерживается ядром. Требуется перезагрузка ПК)");
+        println!("[!] Предупреждение: Не удалось обновить fc_driver.sys (возможно, старый хук удерживается ядром)");
     }
 
     if let Err(e) = copy_freezer {

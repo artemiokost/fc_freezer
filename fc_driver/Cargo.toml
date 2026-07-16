@@ -6,12 +6,13 @@ edition = "2024"
 [lib]
 name = "fc_driver"
 crate-type = ["staticlib"]
+bench = false
+test = false
 
 [dependencies]
 fc_shared = { path = "../fc_shared" }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation"] }
 
-# ИСПРАВЛЕНО: Принудительный аборт при панике для no_std сборки без внешних файлов конфигурации
 [profile.release]
 panic = "abort"
 

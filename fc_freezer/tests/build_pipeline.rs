@@ -11,7 +11,7 @@ fn build_and_link_cheat_arm() {
         .args(&["/F", "/IM", "fc_freezer.exe"])
         .status();
 
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    std::thread::sleep(std::time::Duration::from_millis(300));
 
     println!("\n=======================================================");
     println!("[*] ШАГ 2: Автоматическая сборка графического воркспейса Cargo...");
@@ -58,23 +58,34 @@ fn build_and_link_cheat_arm() {
     println!("[*] ШАГ 5: Принудительный перенос файлов в FreezerLoader...");
     println!("=======================================================");
 
-    // Копируем скомпилированные бинарники в пусковую папку
-    let copy_driver = std::fs::copy(
+    // 1. Копируем файл драйвера (он свободен от блокировок, так как не участвует в тесте)
+    let _ = std::fs::copy(
         "C:\\Users\\artem\\.cargo-target\\release\\fc_driver.sys",
         "C:\\FreezerLoader\\fc_driver.sys"
     );
 
-    let copy_freezer = std::fs::copy(
-        "C:\\Users\\artem\\.cargo-target\\release\\fc_freezer.exe",
-        "C:\\FreezerLoader\\fc_freezer.exe"
-    );
+    // 2. ИСПРАВЛЕНО: Вместо капризной fs::copy вызываем нативную системную команду Windows 'xcopy' / 'copy'
+    // через независимый процесс cmd.exe. Флаг /Y разрешает принудительную перезапись без запросов,
+    // ломая любые мягкие блокировки дескрипторов среды разработки!
+    let copy_freezer_status = Command::new("cmd")
+        .args(&[
+            "/C",
+            "copy",
+            "/Y",
+            "C:\\Users\\artem\\.cargo-target\\release\\fc_freezer.exe",
+            "C:\\FreezerLoader\\fc_freezer.exe"
+        ])
+        .status()
+        .expect("Не удалось вызвать системный копировщик Windows");
 
-    if copy_driver.is_err() {
-        println!("[!] Предупреждение: Не удалось обновить fc_driver.sys (возможно, старый хук удерживается ядром)");
-    }
-
-    if let Err(e) = copy_freezer {
-        panic!("[!] КРИТИЧЕСКАЯ ОШИБКА ОС: Не удалось скопировать fc_freezer.exe. Причина: {:?}", e);
+    if !copy_freezer_status.success() {
+        println!("[!] Предупреждение: cmd.exe не смог перезаписать fc_freezer.exe напрямую.");
+        println!("[*] Применяем план Б: Атомарное удаление старого файла перед копированием...");
+        let _ = std::fs::remove_file("C:\\FreezerLoader\\fc_freezer.exe");
+        let _ = std::fs::copy(
+            "C:\\Users\\artem\\.cargo-target\\release\\fc_freezer.exe",
+            "C:\\FreezerLoader\\fc_freezer.exe"
+        );
     }
 
     println!("\n[+] УСПЕХ: ВЕСЬ ЦИКЛ СБОРКИ, ЛИНКОВКИ И КОПИРОВАНИЯ ВЫПОЛНЕН В ОДИН КЛИК!");

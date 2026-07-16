@@ -1,0 +1,12 @@
+[package]
+name = "fc_driver"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "fc_driver"
+crate-type = ["staticlib"] # Принудительно собираем чистый бинарный объект ядра
+
+[dependencies]
+fc_shared = { workspace = true }
+windows-sys = { workspace = true, features = ["Win32_Foundation"] }

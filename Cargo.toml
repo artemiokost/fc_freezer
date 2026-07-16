@@ -1,0 +1,14 @@
+[workspace]
+members = [
+    "fc_freezer",
+    "fc_shared"
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+fc_shared = { path = "fc_shared" }
+windows-sys = { version = "0.61.2" }

@@ -1,4 +1,4 @@
-use std::{thread, time::Duration, fs, sync::{Arc, Mutex}, process::Command, env};
+use std::{thread, time::Duration, fs, sync::{Arc, Mutex}, process::{Command, Stdio}, env};
 use fc_shared::{
     DRIVER_VERSION_CODE, OP_PING, OP_DISABLE_AI, OP_DIV_SPOOFER,
     OP_DRAFT_MODIFIER, OP_WL_WIN_SPOOFER, OP_SERVER_CHANGER, OP_ALTTAB_BYPASS, WriteMemoryRequest
@@ -44,14 +44,24 @@ pub fn spawn_workers(state: Arc<Mutex<TrainerState>>, config: TrainerConfig) {
         let mut current_version = send_kernel_request(&req_ping);
 
         if current_version != DRIVER_VERSION_CODE {
-            { let mut s = init_state.lock().unwrap(); s.driver_status_str = String::from("Ядро не отвечает. Авто-маппинг..."); }
+            {
+                let mut s = init_state.lock().unwrap();
+                s.driver_status_str = String::from("Ядро не отвечает. Авто-маппинг...");
+            }
+
             if let Ok(mut c_dir) = env::current_exe() {
                 if c_dir.pop() {
                     let m_path = c_dir.join("kdmapper.exe");
                     let d_path = c_dir.join("fc_driver.sys");
+
                     if fs::metadata(&m_path).is_ok() && fs::metadata(&d_path).is_ok() {
-                        let _ = Command::new(m_path).arg(d_path).status();
-                        thread::sleep(Duration::from_millis(800));
+                        // ИСПРАВЛЕНО: Полностью глушим логи kdmapper через Stdio::null(), чтобы не ломать TUI
+                        let _ = Command::new(m_path)
+                            .arg(d_path)
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .status();
+                        thread::sleep(Duration::from_millis(1000));
                     }
                 }
             }
@@ -60,9 +70,13 @@ pub fn spawn_workers(state: Arc<Mutex<TrainerState>>, config: TrainerConfig) {
 
         {
             let mut s = init_state.lock().unwrap();
-            if current_version == DRIVER_VERSION_CODE { s.driver_status_str = format!("v{:.2} [ СВЯЗЬ ЯДРА ОК ]", (current_version as f32) / 100.0); }
-            else if current_version > 0 { s.driver_status_str = format!("v{:.2} [ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА ПК]", (current_version as f32) / 100.0); }
-            else { s.driver_status_str = String::from("ОШИБКА ЗАГРУЗКИ. Проверьте BIOS / HVCI"); }
+            if current_version == DRIVER_VERSION_CODE {
+                s.driver_status_str = format!("v{:.2} [ СВЯЗЬ ЯДРА ОК ]", (current_version as f32) / 100.0);
+            } else if current_version > 0 {
+                s.driver_status_str = format!("v{:.2} [ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА ПК]", (current_version as f32) / 100.0);
+            } else {
+                s.driver_status_str = String::from("ОШИБКА ЗАГРУЗКИ. Проверьте BIOS / HVCI");
+            }
         }
 
         loop {

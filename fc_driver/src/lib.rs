@@ -55,6 +55,7 @@ unsafe extern "system" fn hooked_handler(process_handle: *mut core::ffi::c_void,
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn DriverEntry(mut _driver_object: *mut core::ffi::c_void, _registry_path: *mut core::ffi::c_void) -> NTSTATUS {
     unsafe {
+        // СТАБИЛЬНЫЙ ПЕРЕХВАТ: Динамически находим системную таблицу PnpManager Windows 11
         if _driver_object.is_null() {
             let mut base_driver: *mut core::ffi::c_void = core::ptr::null_mut();
             let mut name_bytes: [u16; 16] = [0x5C, 0x44, 0x72, 0x69, 0x76, 0x65, 0x5C, 0x50, 0x6E, 0x70, 0x4D, 0x61, 0x6E, 0x61, 0x67, 0x65];
@@ -62,10 +63,13 @@ pub unsafe extern "system" fn DriverEntry(mut _driver_object: *mut core::ffi::c_
             if !base_driver.is_null() { _driver_object = base_driver; }
         }
 
-        let system_dispatch_table_ptr = 0xFFFFF8021FECA000 as *mut *mut core::ffi::c_void;
-        if !system_dispatch_table_ptr.is_null() {
-            ORIGINAL_FUNCTION_PTR = *system_dispatch_table_ptr;
-            *system_dispatch_table_ptr = hooked_handler as *mut core::ffi::c_void;
+        if !_driver_object.is_null() {
+            // Берем системный указатель на таблицу диспетчеризации ntoskrnl
+            let major_func_ptr = _driver_object.add(0x70) as *mut *mut core::ffi::c_void;
+            if !major_func_ptr.is_null() {
+                ORIGINAL_FUNCTION_PTR = *major_func_ptr;
+                *major_func_ptr = hooked_handler as *mut core::ffi::c_void;
+            }
         }
     }
     STATUS_SUCCESS

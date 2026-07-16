@@ -1,109 +1,145 @@
-use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
-use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
-use windows_sys::Win32::System::ProcessStatus::{GetModuleInformation, MODULEINFO};
-use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_VM_READ, PROCESS_QUERY_INFORMATION};
-use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPPROCESS,
-};
+pub mod trainer; // ПОДКЛЮЧАЕМ НАШ МОДУЛЬ УПРАВЛЕНИЯ ТРЕЙНЕРОМ
 
-pub struct ProcessDriver {
-    handle: HANDLE,
-}
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS
+};
+use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_VM_READ, PROCESS_QUERY_INFORMATION};
+use windows_sys::Win32::System::ProcessStatus::{EnumProcessModules, GetModuleInformation, MODULEINFO};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 
 pub struct ModuleBounds {
-    pub base_address: usize,
-    pub size_of_image: usize,
+    pub base_address: u64,
+    pub size_of_image: u32,
+}
+
+pub struct ProcessDriver {
+    process_handle: HANDLE,
 }
 
 impl ProcessDriver {
-    pub unsafe fn open(pid: u32) -> Option<Self> {
-        // Права пассивного чтения
-        let handle = unsafe { OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, 0, pid) };
-        if handle.is_null() {
-            return None;
+    pub unsafe fn open(process_id: u32) -> Option<Self> {
+        let handle = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, 0, process_id);
+
+        // ИСПРАВЛЕНО: HANDLE — это сырой указатель, сравниваем с null_mut()
+        if handle == core::ptr::null_mut() {
+            None
+        } else {
+            Some(Self { process_handle: handle })
         }
-        Some(Self { handle })
     }
 
     pub unsafe fn module_bounds(&self) -> ModuleBounds {
-        unsafe {
-            let mut module_info: MODULEINFO = std::mem::zeroed();
-            GetModuleInformation(
-                self.handle,
-                self.handle,
-                &mut module_info,
-                std::mem::size_of::<MODULEINFO>() as u32,
-            );
+        let mut modules = [core::ptr::null_mut(); 1024]; // ИСПРАВЛЕНО: Массив пустых указателей
+        let mut cb_needed = 0u32;
 
-            ModuleBounds {
-                base_address: module_info.lpBaseOfDll as usize,
-                size_of_image: module_info.SizeOfImage as usize,
+        if EnumProcessModules(
+            self.process_handle,
+            modules.as_mut_ptr(),
+            std::mem::size_of_val(&modules) as u32,
+            &mut cb_needed,
+        ) != 0 {
+            let mut mod_info = MODULEINFO {
+                lpBaseOfDll: std::ptr::null_mut(),
+                SizeOfImage: 0,
+                EntryPoint: std::ptr::null_mut(),
+            };
+
+            if GetModuleInformation(
+                self.process_handle,
+                modules[0], // ИСПРАВЛЕНО: Извлекаем первый HANDLE из массива указателей
+                &mut mod_info,
+                std::mem::size_of::<MODULEINFO>() as u32,
+            ) != 0 {
+                return ModuleBounds {
+                    base_address: mod_info.lpBaseOfDll as u64,
+                    size_of_image: mod_info.SizeOfImage,
+                };
             }
         }
+
+        ModuleBounds { base_address: 0, size_of_image: 0 }
     }
 
-    pub unsafe fn aob_scan(&self, start_addr: usize, size: usize, pattern: &[i32]) -> Option<usize> {
-        let mut buffer = vec![0u8; 4096];
-        let chunks = (size + buffer.len() - 1) / buffer.len();
+    pub unsafe fn read_memory(&self, address: u64, buffer: *mut u8, size: usize) -> bool {
+        use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+        let mut bytes_read = 0;
+        ReadProcessMemory(
+            self.process_handle,
+            address as *const core::ffi::c_void,
+            buffer as *mut core::ffi::c_void,
+            size,
+            &mut bytes_read,
+        ) != 0
+    }
 
-        for i in 0..chunks {
-            let current_addr = start_addr + (i * buffer.len());
-            let mut bytes_read = 0;
+    pub unsafe fn aob_scan(&self, base_address: u64, size: u32, pattern: &[i32]) -> Option<u64> {
+        let mut chunk = vec![0u8; 4096];
+        let mut offset = 0u32;
 
-            unsafe {
-                ReadProcessMemory(
-                    self.handle,
-                    current_addr as *const _,
-                    buffer.as_mut_ptr() as *mut _,
-                    buffer.len(),
-                    &mut bytes_read,
-                );
-            }
-            if bytes_read == 0 {
-                continue;
-            }
-
-            for j in 0..(bytes_read.saturating_sub(pattern.len())) {
-                let mut found = true;
-                for k in 0..pattern.len() {
-                    if pattern[k] != -1 && buffer[j + k] != pattern[k] as u8 {
-                        found = false;
-                        break;
+        while offset < size {
+            let current_address = base_address + offset as u64;
+            if self.read_memory(current_address, chunk.as_mut_ptr(), chunk.len()) {
+                for i in 0..chunk.len() - pattern.len() {
+                    let mut found = true;
+                    for j in 0..pattern.len() {
+                        if pattern[j] != -1 && pattern[j] != chunk[i + j] as i32 {
+                            found = false;
+                            break;
+                        }
+                    }
+                    if found {
+                        return Some(current_address + i as u64);
                     }
                 }
-                if found {
-                    return Some(current_addr + j);
-                }
             }
+            offset += 4096 - pattern.len() as u32;
         }
         None
     }
 }
 
-pub unsafe fn get_process_id(process_name: &str) -> u32 {
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snapshot == INVALID_HANDLE_VALUE {
-            return 0;
+// ИСПРАВЛЕНО: Безопасное сравнение дескриптора с null_mut() при выгрузке драйвера процесса
+impl Drop for ProcessDriver {
+    fn drop(&mut self) {
+        if self.process_handle != core::ptr::null_mut() {
+            unsafe { CloseHandle(self.process_handle); }
         }
+    }
+}
 
-        let mut entry: PROCESSENTRY32 = std::mem::zeroed();
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32>() as u32;
+pub unsafe fn get_process_id(process_name: &str) -> u32 {
+    let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    // ИСПРАВЛЕНО: INVALID_HANDLE_VALUE в windows-sys сравнивается как сырой указатель -1
+    if snapshot == INVALID_HANDLE_VALUE {
+        return 0;
+    }
 
-        if Process32First(snapshot, &mut entry) != 0 {
-            loop {
-                let current_name = std::ffi::CStr::from_ptr(entry.szExeFile.as_ptr() as *const i8)
-                    .to_string_lossy();
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        cntUsage: 0,
+        th32ProcessID: 0,
+        th32DefaultHeapID: 0,
+        th32ModuleID: 0,
+        cntThreads: 0,
+        th32ParentProcessID: 0,
+        pcPriClassBase: 0,
+        dwFlags: 0,
+        szExeFile: [0u16; 260],
+    };
 
-                if current_name.to_lowercase().contains(&process_name.to_lowercase()) {
-                    return entry.th32ProcessID;
-                }
-
-                if Process32Next(snapshot, &mut entry) == 0 {
-                    break;
-                }
+    if Process32FirstW(snapshot, &mut entry) != 0 {
+        loop {
+            let exe_name = String::from_utf16_lossy(&entry.szExeFile);
+            if exe_name.contains(process_name) {
+                CloseHandle(snapshot);
+                return entry.th32ProcessID;
+            }
+            if Process32NextW(snapshot, &mut entry) == 0 {
+                break;
             }
         }
     }
+
+    CloseHandle(snapshot);
     0
 }
